@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ProjectLite 專案排程</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="title-row">
+      <h1 id="projName" title="點一下修改專案名稱" tabindex="0"></h1>
+      <span class="save-status" id="saveStatus"></span>
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <div class="toolbar" role="toolbar" aria-label="工具列">
+    <div class="group">
+      <button type="button" class="btn primary" data-act="add" title="在選取任務下方新增（Insert）">＋ 新增任務</button>
+      <button type="button" class="btn" data-act="addChild" title="新增為選取任務的子任務">＋ 子任務</button>
+    </div>
+    <div class="group">
+      <button type="button" class="btn icon" data-act="outdent" title="升階（Shift+Tab）">⇤</button>
+      <button type="button" class="btn icon" data-act="indent" title="降階，變成上一個任務的子任務（Tab）">⇥</button>
+      <button type="button" class="btn icon" data-act="up" title="上移（Alt+↑）">↑</button>
+      <button type="button" class="btn icon" data-act="down" title="下移（Alt+↓）">↓</button>
+      <button type="button" class="btn" data-act="link" title="Ctrl+點選多個任務後，依點選順序串成「完成→開始」">串連</button>
+      <button type="button" class="btn" data-act="edit" title="開啟任務編輯（Enter）">編輯</button>
+      <button type="button" class="btn danger" data-act="delete" title="刪除（Delete）">刪除</button>
+    </div>
+    <div class="group">
+      <button type="button" class="btn icon" data-act="undo" title="復原（Ctrl+Z）">↶</button>
+      <button type="button" class="btn icon" data-act="redo" title="重做（Ctrl+Y）">↷</button>
+    </div>
+    <span class="spacer"></span>
+    <div class="group">
+      <div class="seg" role="group" aria-label="時間刻度">
+        <button type="button" data-zoom="day">日</button>
+        <button type="button" data-zoom="week">週</button>
+        <button type="button" data-zoom="month">月</button>
+      </div>
+      <button type="button" class="btn" data-act="today">跳到資料日期</button>
+      <details class="menu">
+        <summary class="btn">檢視</summary>
+        <div class="menu-panel" id="viewMenu"></div>
+      </details>
+    </div>
+    <div class="group">
+      <button type="button" class="btn" data-act="settings">專案設定</button>
+      <details class="menu">
+        <summary class="btn">檔案</summary>
+        <div class="menu-panel right">
+          <button type="button" data-act="exportJson">匯出備份檔（.json）</button>
+          <button type="button" data-act="importJson">開啟備份檔…</button>
+          <button type="button" data-act="exportCsv">匯出 Excel 表格（.csv）</button>
+          <button type="button" data-act="print">列印 / 另存 PDF</button>
+          <hr>
+          <button type="button" data-act="baseline">儲存為基準線</button>
+          <button type="button" data-act="clearBaseline">清除基準線</button>
+          <hr>
+          <button type="button" data-act="sample">載入範例專案</button>
+          <button type="button" data-act="new">開新專案</button>
+        </div>
+      </details>
+      <button type="button" class="btn icon" data-act="help" title="使用說明與快捷鍵">?</button>
+    </div>
+  </div>
+
+  <div class="warnings" id="warnings" hidden></div>
+  <div class="chainbar" id="chainBar" hidden></div>
+
+  <main class="board" id="board">
+    <section class="list" id="list">
+      <div class="list-head" id="listHead"></div>
+      <div class="list-body" id="listBody"></div>
+    </section>
+    <div class="splitter" id="splitter" title="拖曳調整寬度，雙擊還原"></div>
+    <section class="chart">
+      <div class="chart-head" id="chartHead"></div>
+      <div class="chart-body" id="chartBody"></div>
+      <div class="tip" id="tip" hidden></div>
+    </section>
+    <aside class="drawer" id="drawer" hidden aria-label="任務編輯"></aside>
+  </main>
+  <p class="foot">資料自動存在這台電腦的瀏覽器裡。換電腦或清除瀏覽器資料前，請先用「檔案 → 匯出備份檔」。</p>
+</div>
+
+<dialog id="settingsDlg"></dialog>
+<dialog id="helpDlg"></dialog>
+<dialog id="confirmDlg"></dialog>
+<input type="file" id="fileInput" accept=".json,application/json" hidden>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
