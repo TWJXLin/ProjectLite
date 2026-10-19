@@ -26,6 +26,7 @@ export class Store {
 
   constructor(initial?: Project, private persist = true) {
     this.project = initial ?? this.loadFromStorage() ?? sampleProject();
+    normalizeOrder(this.project);
     this.result = schedule(this.project);
   }
 
@@ -291,19 +292,63 @@ export function validateProject(raw: unknown): Project {
   if (!p || typeof p !== 'object' || !Array.isArray(p.tasks)) throw new Error('檔案裡找不到任務清單');
   if (!isValidIso(p.start)) throw new Error('專案開始日格式不正確');
   if (!p.calendar || !Array.isArray(p.calendar.workWeek) || p.calendar.workWeek.length !== 7) throw new Error('工作日曆格式不正確');
+  // 任務編號只允許英數、底線、點、連字號；不合格或重複的編號一律換成新的數字編號，
+  // 並同步修正所有指到它的上層與前置關係。這樣編號放進畫面時就不需要額外跳脫。
+  const SAFE_ID = /^[A-Za-z0-9_.-]{1,40}$/;
+  const remap = new Map<string, string>();
+  const used = new Set<string>();
+  let counter = 0;
+  for (const t of p.tasks) {
+    const n = Number(t?.id);
+    if (Number.isFinite(n) && String(n) === String(t?.id)) counter = Math.max(counter, n);
+  }
+  const rawIds = p.tasks.map((t, i) => {
+    if (!t || t.id == null || t.id === '') throw new Error(`第 ${i + 1} 個任務缺少編號`);
+    return String(t.id);
+  });
+  const finalIds = rawIds.map((raw) => {
+    let id = raw;
+    if (!SAFE_ID.test(id) || used.has(id)) {
+      do { id = String(++counter); } while (used.has(id));
+    }
+    used.add(id);
+    if (!remap.has(raw)) remap.set(raw, id);
+    return id;
+  });
+  const ref = (v: unknown): string | null => {
+    if (v == null || v === '') return null;
+    const key = String(v);
+    return remap.get(key) ?? (SAFE_ID.test(key) ? key : null);
+  };
   const tasks: Task[] = p.tasks.map((t, i) => {
-    if (!t || t.id == null) throw new Error(`第 ${i + 1} 個任務缺少編號`);
+    const parent = ref(t.parent);
     return {
       ...t,
-      id: String(t.id),
+      id: finalIds[i],
       name: String(t.name ?? ''),
-      parent: t.parent == null || t.parent === '' ? null : String(t.parent),
+      parent: parent !== null && used.has(parent) ? parent : null,
       duration: Math.max(0, Number(t.duration) || 0),
       milestone: !!t.milestone,
       progress: Math.max(0, Math.min(100, Number(t.progress) || 0)),
-      preds: Array.isArray(t.preds) ? t.preds.map((x) => ({ id: String(x.id), type: (['FS', 'SS', 'FF', 'SF'].includes(x.type) ? x.type : 'FS') as RelType, lag: Number(x.lag) || 0 })) : [],
+      preds: Array.isArray(t.preds)
+        ? t.preds.flatMap((x) => {
+            const id = ref(x?.id);
+            if (id === null || !used.has(id)) return [];
+            return [{ id, type: (['FS', 'SS', 'FF', 'SF'].includes(x.type) ? x.type : 'FS') as RelType, lag: Number(x.lag) || 0 }];
+          })
+        : [],
     };
   });
+  // 基準線也要跟著換編號
+  let baseline = p.baseline;
+  if (baseline && baseline.tasks && typeof baseline.tasks === 'object') {
+    const mapped: Record<string, { start: string; finish: string }> = {};
+    for (const [k, v] of Object.entries(baseline.tasks)) {
+      const id = ref(k);
+      if (id && v && isValidIso(v.start) && isValidIso(v.finish)) mapped[id] = { start: v.start, finish: v.finish };
+    }
+    baseline = { savedAt: String(baseline.savedAt ?? ''), tasks: mapped };
+  } else baseline = undefined;
   return {
     version: 1,
     name: String(p.name ?? '未命名專案'),
@@ -315,6 +360,6 @@ export function validateProject(raw: unknown): Project {
       extraWorkdays: (p.calendar.extraWorkdays ?? []).filter(isValidIso),
     },
     tasks,
-    baseline: p.baseline,
+    baseline,
   };
 }

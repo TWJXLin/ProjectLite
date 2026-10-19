@@ -1,4 +1,4 @@
-import { Store } from '../src/model/store';
+import { Store, validateProject } from '../src/model/store';
 import { project, task, fs } from './helpers';
 
 const mk = () => new Store(project([task('1', 3), task('2', 2, [fs('1')]), task('3', 4, [fs('2')])]), false);
@@ -50,5 +50,30 @@ describe('資料倉庫操作', () => {
     expect(s.linkChain(['3', '1', '2'])).toBeNull();
     expect(s.task('1')!.preds[0].id).toBe('3');
     expect(s.task('2')!.preds[0].id).toBe('1');
+  });
+});
+
+describe('匯入檢查', () => {
+  const base = { version: 1, name: 'x', start: '2026-09-07', dataDate: '2026-09-07',
+    calendar: { workWeek: [false, true, true, true, true, true, false], holidays: [], extraWorkdays: [] } };
+  it('不安全或重複的編號會換成新編號，關係跟著修正', () => {
+    const p = validateProject({ ...base, tasks: [
+      { id: '1', name: 'a', parent: null, duration: 1, preds: [] },
+      { id: '2" onclick="x', name: 'b', parent: '1', duration: 1, preds: [{ id: '1', type: 'FS', lag: 0 }] },
+      { id: '1', name: 'dup', parent: '2" onclick="x', duration: 1, preds: [{ id: '2" onclick="x', type: 'SS', lag: 2 }] },
+    ] });
+    expect(p.tasks.map((t) => t.id)).toEqual(['1', '2', '3']);
+    expect(p.tasks[1].parent).toBe('1');
+    expect(p.tasks[2].parent).toBe('2');
+    expect(p.tasks[2].preds).toEqual([{ id: '2', type: 'SS', lag: 2 }]);
+  });
+  it('上層不存在的任務放到最外層，且畫面會顯示它', () => {
+    const p = validateProject({ ...base, tasks: [
+      { id: '1', name: 'a', parent: 'nope', duration: 1, preds: [{ id: 'ghost', type: 'FS', lag: 0 }] },
+    ] });
+    expect(p.tasks[0].parent).toBeNull();
+    expect(p.tasks[0].preds).toEqual([]);
+    const s = new Store(p, false);
+    expect(s.result.order).toEqual(['1']);
   });
 });
