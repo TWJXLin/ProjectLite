@@ -6,6 +6,7 @@
  * 資料一變動就通知畫面重畫，並自動存到瀏覽器。
  */
 import type { Project, Task, Pred, RelType } from './types';
+import { MAX_DURATION, MAX_LAG } from './types';
 import { schedule, makeBaseline, type ScheduleResult } from './schedule';
 import { sampleProject } from './sample';
 import { isValidIso, todayIso } from './dates';
@@ -40,10 +41,17 @@ export class Store {
     const before = JSON.stringify(this.project);
     mutator(this.project);
     if (JSON.stringify(this.project) === before) return;
+    try {
+      this.commit();
+    } catch (err) {
+      // 排程算不出來（例如資料損壞）就把資料退回修改前，不讓壞資料留在記憶體裡
+      this.project = JSON.parse(before);
+      this.result = schedule(this.project);
+      throw err;
+    }
     this.undoStack.push(before);
     if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
     this.redoStack = [];
-    this.commit();
   }
 
   private commit() {
@@ -147,10 +155,12 @@ export class Store {
       const t = p.tasks.find((x) => x.id === id);
       if (!t) return;
       Object.assign(t, patch);
-      t.duration = Math.max(0, Math.round(Number(t.duration) || 0));
+      t.duration = Math.max(0, Math.min(MAX_DURATION, Math.round(Number(t.duration) || 0)));
       t.progress = Math.max(0, Math.min(100, Math.round(Number(t.progress) || 0)));
-      if (t.milestone) t.duration = 0;
+      if (t.milestone) { t.duration = 0; t.progress = t.progress > 0 ? 100 : 0; }
       for (const k of ['actualStart', 'actualFinish', 'notEarlierThan'] as const) if (t[k] !== undefined && !isValidIso(t[k])) delete t[k];
+      if (t.actualStart && t.actualFinish && t.actualFinish < t.actualStart) t.actualStart = t.actualFinish;
+      for (const k of ['budget', 'actualCost'] as const) if (t[k] !== undefined && !Number.isFinite(t[k])) delete t[k];
     });
   }
 
@@ -219,14 +229,14 @@ export class Store {
   addPred(taskId: string, predId: string, type: RelType = 'FS', lag = 0): string | null {
     const problem = this.predProblem(taskId, predId);
     if (problem) return problem;
-    this.change((p) => { p.tasks.find((t) => t.id === taskId)!.preds.push({ id: predId, type, lag }); });
+    this.change((p) => { p.tasks.find((t) => t.id === taskId)!.preds.push({ id: predId, type, lag: Math.max(-MAX_LAG, Math.min(MAX_LAG, Math.round(lag) || 0)) }); });
     return null;
   }
 
   updatePred(taskId: string, predId: string, patch: Partial<Pred>) {
     this.change((p) => {
       const pr = p.tasks.find((t) => t.id === taskId)?.preds.find((x) => x.id === predId);
-      if (pr) Object.assign(pr, patch, { lag: Math.round(Number(patch.lag ?? pr.lag) || 0) });
+      if (pr) Object.assign(pr, patch, { lag: Math.max(-MAX_LAG, Math.min(MAX_LAG, Math.round(Number(patch.lag ?? pr.lag) || 0))) });
     });
   }
 
@@ -320,25 +330,52 @@ export function validateProject(raw: unknown): Project {
     const key = String(v);
     return remap.get(key) ?? (SAFE_ID.test(key) ? key : null);
   };
+  // 只保留我們認得的欄位，每個欄位都檢查型別；備份檔裡多出來或型別不對的東西一律丟掉
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+  const money = (v: unknown) => { const n = Number(v); return v === '' || v == null || !Number.isFinite(n) ? undefined : Math.max(0, n); };
+  const date = (v: unknown) => (typeof v === 'string' && isValidIso(v) ? v : undefined);
   const tasks: Task[] = p.tasks.map((t, i) => {
     const parent = ref(t.parent);
-    return {
-      ...t,
+    const milestone = !!t.milestone;
+    const task: Task = {
       id: finalIds[i],
       name: String(t.name ?? ''),
       parent: parent !== null && used.has(parent) ? parent : null,
-      duration: Math.max(0, Number(t.duration) || 0),
-      milestone: !!t.milestone,
-      progress: Math.max(0, Math.min(100, Number(t.progress) || 0)),
+      duration: milestone ? 0 : Math.max(0, Math.min(MAX_DURATION, Math.round(Number(t.duration)) || 0)),
+      milestone,
+      progress: Math.max(0, Math.min(100, Math.round(Number(t.progress)) || 0)),
       preds: Array.isArray(t.preds)
         ? t.preds.flatMap((x) => {
             const id = ref(x?.id);
             if (id === null || !used.has(id)) return [];
-            return [{ id, type: (['FS', 'SS', 'FF', 'SF'].includes(x.type) ? x.type : 'FS') as RelType, lag: Number(x.lag) || 0 }];
+            const lag = Math.max(-MAX_LAG, Math.min(MAX_LAG, Math.round(Number(x.lag)) || 0));
+            return [{ id, type: (['FS', 'SS', 'FF', 'SF'].includes(x.type) ? x.type : 'FS') as RelType, lag }];
           })
         : [],
     };
+    if (milestone) task.progress = task.progress > 0 ? 100 : 0;
+    const as = date(t.actualStart), af = date(t.actualFinish), ne = date(t.notEarlierThan);
+    if (as) task.actualStart = af && af < as ? af : as;
+    if (af) task.actualFinish = af;
+    if (ne) task.notEarlierThan = ne;
+    const resp = str(t.responsible), notes = str(t.notes), budget = money(t.budget), cost = money(t.actualCost);
+    if (resp) task.responsible = resp;
+    if (notes) task.notes = notes;
+    if (budget !== undefined) task.budget = budget;
+    if (cost !== undefined) task.actualCost = cost;
+    return task;
   });
+  // 上層關係不能繞圈（A 的上層是 B、B 的上層又是 A）；發現就把那個任務放到最外層
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  for (const t of tasks) {
+    const seen = new Set<string>([t.id]);
+    let cur = t.parent;
+    while (cur !== null) {
+      if (seen.has(cur)) { t.parent = null; break; }
+      seen.add(cur);
+      cur = byId.get(cur)?.parent ?? null;
+    }
+  }
   // 基準線也要跟著換編號
   let baseline = p.baseline;
   if (baseline && baseline.tasks && typeof baseline.tasks === 'object') {

@@ -5,6 +5,7 @@
 import type { App } from './app';
 import { COLUMNS, type ColumnKey } from './state';
 import { esc, fmtDate, fmtMoney } from './format';
+import { MAX_DURATION } from '../model/types';
 
 const RIGHT: ColumnKey[] = ['duration', 'start', 'finish', 'float', 'lateStart', 'lateFinish', 'baselineFinish', 'variance', 'budget', 'actualCost'];
 
@@ -45,8 +46,8 @@ function cell(app: App, key: ColumnKey, id: string): string {
     case 'progress': return `<td><div class="pbar"><i><b class="${s.progress >= 100 ? 'done' : ''}" style="width:${s.progress}%"></b></i><span>${s.progress}%</span></div></td>`;
     case 'float': return `<td class="num r${s.float !== null && s.float <= 0 ? ' bad' : ''}">${s.float ?? '—'}</td>`;
     case 'responsible': return `<td>${esc(t.responsible ?? '')}</td>`;
-    case 'lateStart': return `<td class="num r">${s.ls !== null ? fmtDate(cal.dateOf(s.ls), era) : '—'}</td>`;
-    case 'lateFinish': return `<td class="num r">${s.lf !== null ? fmtDate(cal.dateOf(Math.max(s.ls ?? s.lf, s.lf - 1)), era) : '—'}</td>`;
+    case 'lateStart': return `<td class="num r">${s.lateStart ? fmtDate(s.lateStart, era) : '—'}</td>`;
+    case 'lateFinish': return `<td class="num r">${s.lateFinish ? fmtDate(s.lateFinish, era) : '—'}</td>`;
     case 'baselineFinish': return `<td class="num r">${fmtDate(s.baselineFinish, era) || '—'}</td>`;
     case 'variance': {
       const v = s.finishVariance;
@@ -73,6 +74,8 @@ export function renderList(app: App) {
     `<th class="${RIGHT.includes(k) ? 'r' : ''}">${COLUMNS[k].label}</th>`).join('')}</tr></thead></table>`;
 
   const body = app.$('listBody');
+  // 正在表格裡直接打字時不要重畫，否則輸入框會被換掉、字會不見（例如手機跳出鍵盤觸發視窗縮放）
+  if (body.querySelector('input.inline-edit')) return;
   const scrollTop = body.scrollTop, scrollLeft = body.scrollLeft;
   if (!app.rows.length) {
     body.innerHTML = `<div class="empty">${ui.critOnly ? '目前沒有關鍵路徑任務。' : '還沒有任務。按「＋ 新增任務」開始。'}</div>`;
@@ -94,8 +97,9 @@ export function startInlineEdit(app: App, id: string, col: 'name' | 'duration') 
   if (!td || !t) return;
   if (col === 'duration' && (app.store.hasChildren(id) || t.milestone)) { app.openDrawer(id); return; }
   const input = document.createElement('input');
+  input.className = 'inline-edit';
   input.value = col === 'name' ? t.name : String(t.duration);
-  if (col === 'duration') { input.type = 'number'; input.min = '0'; input.className = 'num'; }
+  if (col === 'duration') { input.type = 'number'; input.min = '0'; input.max = String(MAX_DURATION); input.classList.add('num'); }
   input.setAttribute('aria-label', col === 'name' ? '任務名稱' : '工期（工作天）');
   td.innerHTML = '';
   td.appendChild(input);
@@ -105,6 +109,7 @@ export function startInlineEdit(app: App, id: string, col: 'name' | 'duration') 
   const finish = (save: boolean) => {
     if (done) return;
     done = true;
+    input.classList.remove('inline-edit'); // 編輯結束，允許表格重畫
     const v = input.value.trim();
     if (save && col === 'name' && v && v !== t.name) app.store.updateTask(id, { name: v });
     else if (save && col === 'duration' && v !== '' && Number(v) !== t.duration) app.store.updateTask(id, { duration: Math.max(0, Math.round(Number(v))) });

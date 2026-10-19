@@ -4,6 +4,7 @@
  */
 import type { App } from './app';
 import type { RelType, Task } from '../model/types';
+import { MAX_DURATION, MAX_LAG } from '../model/types';
 import { esc, fmtDate, REL_LABEL } from './format';
 
 let lastError = '';
@@ -21,7 +22,6 @@ export function renderDrawer(app: App) {
   const { store, ui } = app;
   const s = store.result.byId[id];
   const era = ui.era;
-  const cal = store.result.cal;
   const isSum = s.isSummary;
 
   const dl = (pairs: [string, string, string?][]) =>
@@ -30,8 +30,8 @@ export function renderDrawer(app: App) {
   const calc = dl([
     ['最早開始', fmtDate(s.start, era)],
     ['最早完成', fmtDate(s.finish, era)],
-    ['最晚開始', s.ls !== null ? fmtDate(cal.dateOf(s.ls), era) : '—'],
-    ['最晚完成', s.lf !== null ? fmtDate(cal.dateOf(Math.max(s.ls ?? s.lf, s.lf - 1)), era) : '—'],
+    ['最晚開始', s.lateStart ? fmtDate(s.lateStart, era) : '—'],
+    ['最晚完成', s.lateFinish ? fmtDate(s.lateFinish, era) : '—'],
     ['總浮時', s.float === null ? '—' : `${s.float} 天`, s.critical ? 'crit' : ''],
     ['剩餘工期', `${s.remaining} 天`],
     ...(s.baselineFinish ? [
@@ -53,7 +53,7 @@ export function renderDrawer(app: App) {
       return `<div class="pred-row" data-pred="${esc(p.id)}">
         <span class="nm" title="${esc(pt?.name)}"><span class="w">${esc(ps?.wbs ?? '?')}</span>${esc(pt?.name ?? '（已刪除）')}</span>
         <select data-f="ptype-${esc(p.id)}" data-ptype aria-label="關係類型">${(['FS', 'SS', 'FF', 'SF'] as RelType[]).map((k) => `<option value="${k}" ${p.type === k ? 'selected' : ''}>${REL_LABEL[k]}</option>`).join('')}</select>
-        <input type="number" class="num" data-f="plag-${esc(p.id)}" data-plag value="${p.lag}" title="延後（正）或提前（負）幾個工作天" aria-label="Lag">
+        <input type="number" class="num" data-f="plag-${esc(p.id)}" data-plag value="${p.lag}" min="${-MAX_LAG}" max="${MAX_LAG}" title="延後（正）或提前（負）幾個工作天" aria-label="Lag">
         <button type="button" data-premove title="移除這個關係" aria-label="移除">✕</button>
       </div>`;
     }).join('');
@@ -61,16 +61,20 @@ export function renderDrawer(app: App) {
     const options = candidates.map((x) => `<option value="${esc(x.id)}">${esc(store.result.byId[x.id].wbs)} ${esc(x.name)}</option>`).join('');
     const succs = store.successors(id).map(({ task: st }) => `<button type="button" class="chip" data-goto="${esc(st.id)}">${esc(store.result.byId[st.id].wbs)} ${esc(st.name)}</button>`).join('');
 
-    main = `
-      <section class="fgrid">
-        <label class="field"><span>工期（工作天）</span><input type="number" min="0" class="num" data-f="duration" value="${t.duration}" ${t.milestone ? 'disabled' : ''}></label>
-        <div class="field"><span>&nbsp;</span><label class="check"><input type="checkbox" data-f="milestone" ${t.milestone ? 'checked' : ''}> 設為里程碑</label></div>
-        <div class="field full"><span>完成進度</span>
+    const progressUi = t.milestone
+      ? `<div class="field full"><span>狀態</span><label class="check"><input type="checkbox" data-f="msDone" ${t.progress >= 100 ? 'checked' : ''}> 已達成</label></div>
+         <label class="field full"><span>達成日期</span><input type="date" data-f="actualFinish" value="${esc(t.actualFinish ?? '')}"></label>`
+      : `<div class="field full"><span>完成進度</span>
           <div class="prog-row"><input type="range" min="0" max="100" step="5" data-f="progressRange" value="${t.progress}" aria-label="完成進度"><input type="number" min="0" max="100" class="num" data-f="progress" value="${t.progress}" aria-label="完成進度百分比"></div>
         </div>
-        <label class="field"><span>實際開始</span><input type="date" data-f="actualStart" value="${t.actualStart ?? ''}"></label>
-        <label class="field"><span>實際完成</span><input type="date" data-f="actualFinish" value="${t.actualFinish ?? ''}"></label>
-        <label class="field full"><span>不得早於此日開始（選填）</span><input type="date" data-f="notEarlierThan" value="${t.notEarlierThan ?? ''}"><span class="hint">例如要等建照核發、材料進場才能開始。</span></label>
+        <label class="field"><span>實際開始</span><input type="date" data-f="actualStart" value="${esc(t.actualStart ?? '')}"></label>
+        <label class="field"><span>實際完成</span><input type="date" data-f="actualFinish" value="${esc(t.actualFinish ?? '')}"></label>`;
+    main = `
+      <section class="fgrid">
+        <label class="field"><span>工期（工作天）</span><input type="number" min="0" max="${MAX_DURATION}" class="num" data-f="duration" value="${t.duration}" ${t.milestone ? 'disabled' : ''}></label>
+        <div class="field"><span>&nbsp;</span><label class="check"><input type="checkbox" data-f="milestone" ${t.milestone ? 'checked' : ''}> 設為里程碑</label></div>
+        ${progressUi}
+        <label class="field full"><span>${t.milestone ? '不得早於此日達成（選填）' : '不得早於此日開始（選填）'}</span><input type="date" data-f="notEarlierThan" value="${esc(t.notEarlierThan ?? '')}"><span class="hint">例如要等建照核發、材料進場才能開始。</span></label>
       </section>
       <section><h3>排程結果</h3>${calc}</section>
       <section>
@@ -83,8 +87,8 @@ export function renderDrawer(app: App) {
       <section><h3>後續任務（誰在等它）</h3><div class="succ-list">${succs || '<p class="note">沒有。</p>'}</div></section>
       <section class="fgrid">
         <label class="field full"><span>負責人</span><input data-f="responsible" list="ownerList" value="${esc(t.responsible ?? '')}"><datalist id="ownerList">${owners.map((o) => `<option value="${esc(o)}">`).join('')}</datalist></label>
-        <label class="field"><span>預算（元）</span><input type="number" min="0" class="num" data-f="budget" value="${t.budget ?? ''}"></label>
-        <label class="field"><span>實際成本（元）</span><input type="number" min="0" class="num" data-f="actualCost" value="${t.actualCost ?? ''}"></label>
+        <label class="field"><span>預算（元）</span><input type="number" min="0" class="num" data-f="budget" value="${esc(t.budget ?? '')}"></label>
+        <label class="field"><span>實際成本（元）</span><input type="number" min="0" class="num" data-f="actualCost" value="${esc(t.actualCost ?? '')}"></label>
         <label class="field full"><span>備註</span><textarea data-f="notes">${esc(t.notes ?? '')}</textarea></label>
       </section>`;
   }
@@ -103,17 +107,32 @@ export function renderDrawer(app: App) {
 export function bindDrawer(app: App) {
   const el = app.$('drawer');
   const current = () => app.ui.selected!;
-  const update = (patch: Partial<Task>) => app.store.updateTask(current(), patch);
 
+  // 延後一拍再套用：按 Tab 時瀏覽器會先觸發 change 再移動焦點，
+  // 若立刻重畫側欄，焦點要去的欄位已經被換掉。等焦點移好後再重畫，就能把焦點放回同名欄位。
   el.addEventListener('change', (e) => {
     const target = e.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
     const f = target.dataset.f ?? '';
     const v = target.value;
-    const t = app.store.task(current());
-    if (!t) return;
+    const checked = (target as HTMLInputElement).checked;
+    const taskId = current();
+    const isPtype = 'ptype' in target.dataset, isPlag = 'plag' in target.dataset;
+    const predId = target.closest<HTMLElement>('[data-pred]')?.dataset.pred;
+    setTimeout(() => applyChange(taskId, f, v, checked, isPtype, isPlag, predId), 0);
+  });
+
+  const applyChange = (taskId: string, f: string, v: string, checked: boolean, isPtype: boolean, isPlag: boolean, predId?: string) => {
+    const t = app.store.task(taskId);
+    if (!t || app.ui.selected !== taskId) return;
+    const update = (patch: Partial<Task>) => app.store.updateTask(taskId, patch);
     if (f === 'name') { if (v.trim()) update({ name: v.trim() }); }
     else if (f === 'duration') update({ duration: Number(v) });
-    else if (f === 'milestone') update({ milestone: (target as HTMLInputElement).checked, duration: (target as HTMLInputElement).checked ? 0 : (t.duration || 1) });
+    else if (f === 'milestone') update({ milestone: checked, duration: checked ? 0 : (t.duration || 1), actualStart: undefined });
+    else if (f === 'msDone') {
+      const dd = app.store.project.dataDate;
+      const s = app.store.result.byId[taskId];
+      update(checked ? { progress: 100, actualFinish: s.finish <= dd ? s.finish : dd } : { progress: 0, actualFinish: undefined });
+    }
     else if (f === 'progress' || f === 'progressRange') {
       const p = Number(v);
       const patch: Partial<Task> = { progress: p };
@@ -127,26 +146,26 @@ export function bindDrawer(app: App) {
     }
     else if (f === 'actualStart' || f === 'actualFinish' || f === 'notEarlierThan') {
       const patch: Partial<Task> = { [f]: v || undefined };
-      if (f === 'actualFinish' && v) patch.progress = 100;
-      if (f === 'actualStart' && v && t.progress === 0) patch.progress = 1;
+      if (f === 'actualFinish' && v) {
+        patch.progress = 100;
+        if (t.actualStart && v < t.actualStart) { app.toast('實際完成不能早於實際開始，已把實際開始改為同一天'); }
+      }
+      if (f === 'actualStart' && v) {
+        if (t.actualFinish && v > t.actualFinish) { app.toast('實際開始不能晚於實際完成'); app.render(); return; }
+        if (t.progress === 0) patch.progress = 1;
+      }
       update(patch);
     }
     else if (f === 'responsible') update({ responsible: v.trim() || undefined });
     else if (f === 'budget' || f === 'actualCost') update({ [f]: v === '' ? undefined : Math.max(0, Number(v)) });
     else if (f === 'notes') update({ notes: v || undefined });
     else if (f === 'newPred' && v) {
-      lastError = app.store.addPred(current(), v) ?? '';
+      lastError = app.store.addPred(taskId, v) ?? '';
       if (lastError) app.render();
     }
-    else if ('ptype' in target.dataset) {
-      const pid = target.closest<HTMLElement>('[data-pred]')!.dataset.pred!;
-      app.store.updatePred(current(), pid, { type: v as RelType });
-    }
-    else if ('plag' in target.dataset) {
-      const pid = target.closest<HTMLElement>('[data-pred]')!.dataset.pred!;
-      app.store.updatePred(current(), pid, { lag: Number(v) });
-    }
-  });
+    else if (isPtype && predId) app.store.updatePred(taskId, predId, { type: v as RelType });
+    else if (isPlag && predId) app.store.updatePred(taskId, predId, { lag: Number(v) });
+  };
 
   // 拉進度條時即時顯示數字
   el.addEventListener('input', (e) => {
@@ -158,7 +177,8 @@ export function bindDrawer(app: App) {
   });
 
   el.addEventListener('keydown', (e) => {
-    e.stopPropagation();
+    const tag = (e.target as HTMLElement).tagName;
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) e.stopPropagation();
     if (e.key === 'Escape') app.closeDrawer();
     if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') (e.target as HTMLInputElement).blur();
   });

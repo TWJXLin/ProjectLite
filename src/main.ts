@@ -15,6 +15,7 @@ const app = new App(store, loadUi());
 
 function addTask(asChild: boolean) {
   const sel = app.ui.selected;
+  if (app.ui.critOnly) { app.ui.critOnly = false; app.toast('已關閉「只看關鍵路徑」，新任務才看得到'); }
   if (asChild && sel) app.ui.collapsed = app.ui.collapsed.filter((x) => x !== sel);
   const id = store.addTask(sel, asChild);
   app.ui.selected = id;
@@ -191,6 +192,8 @@ document.addEventListener('keydown', (e) => {
   if (['input', 'textarea', 'select'].includes(tag) || document.querySelector('dialog[open]')) return;
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key;
+  // 焦點在按鈕或選單上時，Tab / Enter / 空白鍵交給瀏覽器，鍵盤使用者才能操作工具列
+  if (['button', 'summary', 'a'].includes(tag) && ['Tab', 'Enter', ' '].includes(key)) return;
   const sel = app.ui.selected;
   const go = (delta: number) => {
     const i = sel ? app.rows.indexOf(sel) : -1;
@@ -218,6 +221,12 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('resize', () => app.render());
+
+// 任何沒被接住的錯誤都用提示條顯示，而不是默默失敗
+window.addEventListener('error', (e) => {
+  const msg = e.error instanceof Error ? e.error.message : String(e.message);
+  app.toast(/[\u4e00-\u9fff]/.test(msg) ? msg : '發生錯誤，這次修改沒有套用。若持續發生請匯出備份檔並回報。');
+});
 
 bindGantt(app);
 bindDrawer(app);

@@ -171,7 +171,6 @@ export function exportJson(app: App) {
 export function exportCsv(app: App) {
   const { store, ui } = app;
   const r = store.result;
-  const cal = r.cal;
   const head = ['WBS', '任務名稱', '工期(工作天)', '開始', '完成', '最晚開始', '最晚完成', '總浮時', '關鍵路徑', '進度%', '前置任務', '負責人', '預算', '實際成本', '基準完成', '完成差異', '備註'];
   const q = (v: unknown) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   // 使用者輸入的文字若以 = + - @ 開頭，Excel 會當成公式執行；前面補一個單引號讓它變成純文字
@@ -181,7 +180,7 @@ export function exportCsv(app: App) {
     const preds = t.preds.map((p) => `${r.byId[p.id]?.wbs ?? p.id}${p.type}${p.lag ? (p.lag > 0 ? '+' : '') + p.lag : ''}`).join(' ');
     return [
       s.wbs, text('　'.repeat(s.depth) + t.name), s.isSummary ? '' : t.duration, fmtDate(s.start, ui.era), fmtDate(s.finish, ui.era),
-      s.ls !== null ? fmtDate(cal.dateOf(s.ls), ui.era) : '', s.lf !== null ? fmtDate(cal.dateOf(Math.max(s.ls ?? s.lf, s.lf - 1)), ui.era) : '',
+      fmtDate(s.lateStart ?? undefined, ui.era), fmtDate(s.lateFinish ?? undefined, ui.era),
       s.float ?? '', s.critical ? '是' : '', s.progress, preds, text(t.responsible), t.budget ?? '', t.actualCost ?? '',
       fmtDate(s.baselineFinish, ui.era), s.finishVariance ?? '', text(t.notes),
     ].map(q).join(',');

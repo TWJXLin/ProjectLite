@@ -8,6 +8,9 @@
 import type { WorkCalendar } from './types';
 import { toDayNum, fromDayNum, weekday } from './dates';
 
+/** 可計算的最遠距離（日曆天）；超過就視為資料錯誤，避免瀏覽器卡死 */
+export const MAX_CALENDAR_SPAN = 2_000_000;
+
 export interface CalendarIndex {
   /** 第 i 個工作天的日期 */
   dateOf(index: number): string;
@@ -55,12 +58,14 @@ export function buildCalendarIndex(cal: WorkCalendar, startIso: string): Calenda
   };
 
   const dateOf = (index: number): string => {
+    if (!Number.isFinite(index) || Math.abs(index) > MAX_CALENDAR_SPAN) throw new Error('日期超出可計算範圍，請檢查工期或 Lag 是否填錯');
     if (index >= 0) { ensureForward(index); return fromDayNum(forward[index]); }
     const i = -index - 1; ensureBackward(i); return fromDayNum(backward[i]);
   };
 
   // 找出 >= dayNum 的第一個工作天序號
   const indexOnOrAfterNum = (dayNum: number): number => {
+    if (Math.abs(dayNum - origin) > MAX_CALENDAR_SPAN) throw new Error('日期超出可計算範圍');
     if (dayNum >= origin) {
       // 先往後補足索引，直到最後一個工作天 >= dayNum，再用二分搜尋
       ensureForward(0);

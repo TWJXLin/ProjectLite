@@ -3,6 +3,10 @@
  * 日期一律存成 'YYYY-MM-DD' 字串，存檔、匯出都好讀。
  */
 
+/** 工期與 Lag 的上限（工作天）：約 40 年，足夠任何工程，也防止誤填超大數字 */
+export const MAX_DURATION = 10_000;
+export const MAX_LAG = 10_000;
+
 /** 前置關係類型：FS 完成→開始、SS 開始→開始、FF 完成→完成、SF 開始→完成 */
 export type RelType = 'FS' | 'SS' | 'FF' | 'SF';
 

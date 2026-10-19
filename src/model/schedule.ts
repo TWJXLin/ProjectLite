@@ -14,6 +14,7 @@
  * 所以工期 3 天、es=0 的任務，ef=3，完成日是第 2 個工作天。
  */
 import type { Project, Task, RelType } from './types';
+import { MAX_DURATION, MAX_LAG } from './types';
 import { buildCalendarIndex, type CalendarIndex } from './calendar';
 import { isValidIso } from './dates';
 
@@ -27,6 +28,8 @@ export interface Scheduled {
   status: Status;
   es: number; ef: number;
   ls: number | null; lf: number | null;
+  lateStart: string | null;  // 顯示用最晚開始日
+  lateFinish: string | null; // 顯示用最晚完成日
   float: number | null;      // 總浮時（工作天）；已完成的任務為 null
   critical: boolean;
   start: string;             // 顯示用開始日
@@ -52,7 +55,9 @@ export interface ScheduleResult {
 }
 
 const isStarted = (t: Task) => t.progress > 0 || !!t.actualStart;
-const isDone = (t: Task) => t.progress >= 100 || !!t.actualFinish;
+// 里程碑沒有「進行中」：有任何進度就視為已達成
+const isDone = (t: Task) => t.progress >= 100 || !!t.actualFinish || (t.milestone && t.progress > 0);
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 export function buildTree(tasks: Task[]) {
   const children = new Map<string | null, Task[]>();
@@ -105,7 +110,7 @@ export function schedule(project: Project): ScheduleResult {
   // ---- 拓撲排序（Kahn 演算法）：保證先算前置任務；同時找出循環相依 ----
   const indeg = new Map(leaves.map((t) => [t.id, predsOf.get(t.id)!.length]));
   const succs = new Map<string, { id: string; type: RelType; lag: number }[]>(leaves.map((t) => [t.id, []]));
-  for (const t of leaves) for (const p of predsOf.get(t.id)!) succs.get(p.id)!.push({ id: t.id, type: p.type, lag: p.lag });
+  for (const t of leaves) for (const p of predsOf.get(t.id)!) succs.get(p.id)!.push({ id: t.id, type: p.type, lag: clamp(Math.round(p.lag) || 0, -MAX_LAG, MAX_LAG) });
   const queue = leaves.filter((t) => indeg.get(t.id) === 0).map((t) => t.id);
   const topo: string[] = [];
   while (queue.length) {
@@ -134,24 +139,27 @@ export function schedule(project: Project): ScheduleResult {
   const remaining = new Map<string, number>();
   for (const id of topo) {
     const t = byTask.get(id)!;
-    const dur = t.milestone ? 0 : Math.max(0, Math.round(t.duration));
+    const dur = t.milestone ? 0 : clamp(Math.round(t.duration) || 0, 0, MAX_DURATION);
+    // 里程碑是「某一天結束時」的一個瞬間：序號 s 代表第 s-1 個工作天的下班時刻。
+    // 凡是從「開始」推來的時間（SS、SF、資料日期、限制日）都要 +1 才符合這個慣例；
+    // 從「完成」推來的（FS、FF）本來就是下班時刻，不用調整。
+    const msShift = t.milestone ? 1 : 0;
     // 前置關係推出來的最早開始
     let logic = 0;
     for (const p of predsOf.get(id)!) {
       if (brokenEdges.has(`${p.id}>${id}`)) continue;
-      const lag = Math.round(p.lag || 0);
+      const lag = clamp(Math.round(p.lag) || 0, -MAX_LAG, MAX_LAG);
       let c: number;
       switch (p.type) {
-        case 'FS': c = ef.get(p.id)! + lag; break;            // 前置完成後才能開始
-        case 'SS': c = es.get(p.id)! + lag; break;            // 前置開始後才能開始
-        case 'FF': c = ef.get(p.id)! + lag - dur; break;      // 前置完成後才能完成
-        case 'SF': c = es.get(p.id)! + lag - dur; break;      // 前置開始後才能完成
+        case 'FS': c = ef.get(p.id)! + lag; break;                      // 前置完成後才能開始
+        case 'SS': c = es.get(p.id)! + lag + msShift; break;            // 前置開始後才能開始
+        case 'FF': c = ef.get(p.id)! + lag - dur; break;                // 前置完成後才能完成
+        case 'SF': c = es.get(p.id)! + lag - dur + msShift; break;      // 前置開始後才能完成
       }
       logic = Math.max(logic, c);
     }
     if (isValidIso(t.notEarlierThan)) {
-      const n = cal.indexOnOrAfter(t.notEarlierThan);
-      logic = Math.max(logic, t.milestone ? n + 1 : n);
+      logic = Math.max(logic, cal.indexOnOrAfter(t.notEarlierThan) + msShift);
     }
 
     let s: number, f: number, rem: number;
@@ -169,7 +177,7 @@ export function schedule(project: Project): ScheduleResult {
       if (dur > 0) f = Math.max(f, s + 1);
     } else {
       // 還沒開始的工作不能排在資料日期之前
-      s = Math.max(logic, dd);
+      s = Math.max(logic, dd + msShift);
       f = s + dur;
       rem = dur;
     }
@@ -213,18 +221,22 @@ export function schedule(project: Project): ScheduleResult {
     const s = es.get(t.id)!, f = ef.get(t.id)!;
     const status: Status = isDone(t) ? 'done' : isStarted(t) ? 'active' : 'todo';
     let start: string, finish: string;
+    const lfi = lf.get(t.id), lsi = ls.get(t.id);
+    let lateStart: string | null = null, lateFinish: string | null = null;
     if (t.milestone) {
-      const d = isValidIso(t.actualFinish) ? t.actualFinish : cal.dateOf(Math.max(0, s - 1));
-      start = finish = s === 0 && !t.actualFinish ? cal.dateOf(0) : d;
+      const d = isValidIso(t.actualFinish) && status === 'done' ? t.actualFinish : cal.dateOf(Math.max(0, s - 1));
+      start = finish = d;
+      if (lfi !== undefined) lateStart = lateFinish = cal.dateOf(Math.max(0, lfi - 1));
     } else {
       start = isValidIso(t.actualStart) ? t.actualStart : cal.dateOf(s);
       finish = isValidIso(t.actualFinish) && status === 'done' ? t.actualFinish : cal.dateOf(Math.max(s, f - 1));
+      if (lfi !== undefined && lsi !== undefined) { lateStart = cal.dateOf(lsi); lateFinish = cal.dateOf(Math.max(lsi, lfi - 1)); }
     }
     const fl = status === 'done' ? null : lf.get(t.id)! - f;
     byId[t.id] = {
       id: t.id, wbs: wbs.get(t.id)!, depth: depth.get(t.id)!, isSummary: false, status,
       es: s, ef: f,
-      ls: ls.get(t.id) ?? null, lf: lf.get(t.id) ?? null,
+      ls: lsi ?? null, lf: lfi ?? null, lateStart, lateFinish,
       float: fl, critical: fl !== null && fl <= 0,
       start, finish,
       progress: status === 'done' ? 100 : Math.max(0, Math.min(100, t.progress)),
@@ -248,7 +260,7 @@ export function schedule(project: Project): ScheduleResult {
     const sc: Scheduled = {
       id, wbs: wbs.get(id)!, depth: depth.get(id)!, isSummary: true, status,
       es: Math.min(...kids.map((k) => k.es)), ef: Math.max(...kids.map((k) => k.ef)),
-      ls: null, lf: null,
+      ls: null, lf: null, lateStart: null, lateFinish: null,
       float: floats.length ? Math.min(...floats) : null,
       critical: kids.some((k) => k.critical),
       start: kids.map((k) => k.start).sort()[0],
